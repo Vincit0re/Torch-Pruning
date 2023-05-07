@@ -1,27 +1,29 @@
-import sys, os
+import registry
+import engine.utils as utils
+import torch_pruning as tp
+import torch.nn.functional as F
+import torch.nn as nn
+import torch
+import argparse
+from functools import partial
+import sys
+import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-from functools import partial
-import argparse
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-import torch_pruning as tp
-import engine.utils as utils
-import registry
 
 parser = argparse.ArgumentParser()
 
 # Basic options
-parser.add_argument("--mode", type=str, required=True, choices=["pretrain", "prune", "test"])
+parser.add_argument("--mode", type=str, required=True,
+                    choices=["pretrain", "prune", "test"])
 parser.add_argument("--model", type=str, required=True)
 parser.add_argument("--verbose", action="store_true", default=False)
-parser.add_argument("--dataset", type=str, default="cifar100", choices=['cifar10', 'cifar100', 'modelnet40'])
+parser.add_argument("--dataset", type=str, default="cifar100",
+                    choices=['cifar10', 'cifar100', 'modelnet40', 'svhn'])
 parser.add_argument("--batch-size", type=int, default=128)
 parser.add_argument("--total-epochs", type=int, default=100)
-parser.add_argument("--lr-decay-milestones", default="60,80", type=str, help="milestones for learning rate decay")
+parser.add_argument("--lr-decay-milestones", default="60,80",
+                    type=str, help="milestones for learning rate decay")
 parser.add_argument("--lr-decay-gamma", default=0.1, type=float)
 parser.add_argument("--lr", default=0.01, type=float, help="learning rate")
 parser.add_argument("--restore", type=str, default=None)
@@ -37,25 +39,33 @@ parser.add_argument("--weight-decay", type=float, default=5e-4)
 
 parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--global-pruning", action="store_true", default=False)
-parser.add_argument("--sl-total-epochs", type=int, default=100, help="epochs for sparsity learning")
-parser.add_argument("--sl-lr", default=0.01, type=float, help="learning rate for sparsity learning")
-parser.add_argument("--sl-lr-decay-milestones", default="60,80", type=str, help="milestones for sparsity learning")
-parser.add_argument("--sl-reg-warmup", type=int, default=0, help="epochs for sparsity learning")
+parser.add_argument("--sl-total-epochs", type=int,
+                    default=100, help="epochs for sparsity learning")
+parser.add_argument("--sl-lr", default=0.01, type=float,
+                    help="learning rate for sparsity learning")
+parser.add_argument("--sl-lr-decay-milestones", default="60,80",
+                    type=str, help="milestones for sparsity learning")
+parser.add_argument("--sl-reg-warmup", type=int, default=0,
+                    help="epochs for sparsity learning")
 parser.add_argument("--sl-restore", type=str, default=None)
 parser.add_argument("--iterative-steps", default=400, type=int)
 
 args = parser.parse_args()
 
+
 def progressive_pruning(pruner, model, speed_up, example_inputs):
     model.eval()
-    base_ops, _ = tp.utils.count_ops_and_params(model, example_inputs=example_inputs)
+    base_ops, _ = tp.utils.count_ops_and_params(
+        model, example_inputs=example_inputs)
     current_speed_up = 1
     while current_speed_up < speed_up:
         pruner.step(interactive=False)
-        pruned_ops, _ = tp.utils.count_ops_and_params(model, example_inputs=example_inputs)
+        pruned_ops, _ = tp.utils.count_ops_and_params(
+            model, example_inputs=example_inputs)
         current_speed_up = float(base_ops) / pruned_ops
-        #print(current_speed_up)
+        # print(current_speed_up)
     return current_speed_up
+
 
 def eval(model, test_loader, device=None):
     correct = 0
@@ -75,6 +85,7 @@ def eval(model, test_loader, device=None):
             total += len(target)
     return (correct / total).item(), (loss / total).item()
 
+
 def train_model(
     model,
     train_loader,
@@ -84,7 +95,7 @@ def train_model(
     lr_decay_milestones,
     lr_decay_gamma=0.1,
     save_as=None,
-    
+
     # For pruning
     weight_decay=5e-4,
     save_state_dict_only=True,
@@ -114,7 +125,7 @@ def train_model(
             loss = F.cross_entropy(out, target)
             loss.backward()
             if pruner is not None:
-                pruner.regularize(model) # for sparsity learning
+                pruner.regularize(model)  # for sparsity learning
             optimizer.step()
             if i % 10 == 0 and args.verbose:
                 args.logger.info(
@@ -127,7 +138,7 @@ def train_model(
                         optimizer.param_groups[0]["lr"],
                     )
                 )
-        
+
         model.eval()
         acc, val_loss = eval(model, test_loader, device=device)
         args.logger.info(
@@ -139,7 +150,8 @@ def train_model(
             os.makedirs(args.output_dir, exist_ok=True)
             if args.mode == "prune":
                 if save_as is None:
-                    save_as = os.path.join( args.output_dir, "{}_{}_{}.pth".format(args.dataset, args.model, args.method) )
+                    save_as = os.path.join(args.output_dir, "{}_{}_{}.pth".format(
+                        args.dataset, args.model, args.method))
 
                 if save_state_dict_only:
                     torch.save(model.state_dict(), save_as)
@@ -147,7 +159,8 @@ def train_model(
                     torch.save(model, save_as)
             elif args.mode == "pretrain":
                 if save_as is None:
-                    save_as = os.path.join( args.output_dir, "{}_{}.pth".format(args.dataset, args.model) )
+                    save_as = os.path.join(
+                        args.output_dir, "{}_{}.pth".format(args.dataset, args.model))
                 torch.save(model.state_dict(), save_as)
             best_acc = acc
         scheduler.step()
@@ -158,28 +171,34 @@ def get_pruner(model, example_inputs):
     args.sparsity_learning = False
     if args.method == "random":
         imp = tp.importance.RandomImportance()
-        pruner_entry = partial(tp.pruner.MagnitudePruner, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.MagnitudePruner,
+                               global_pruning=args.global_pruning)
     elif args.method == "l1":
         imp = tp.importance.MagnitudeImportance(p=1)
-        pruner_entry = partial(tp.pruner.MagnitudePruner, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.MagnitudePruner,
+                               global_pruning=args.global_pruning)
     elif args.method == "lamp":
         imp = tp.importance.LAMPImportance(p=2)
-        pruner_entry = partial(tp.pruner.MagnitudePruner, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.MagnitudePruner,
+                               global_pruning=args.global_pruning)
     elif args.method == "slim":
         args.sparsity_learning = True
         imp = tp.importance.BNScaleImportance()
-        pruner_entry = partial(tp.pruner.BNScalePruner, reg=args.reg, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.BNScalePruner,
+                               reg=args.reg, global_pruning=args.global_pruning)
     elif args.method == "group_norm":
         imp = tp.importance.GroupNormImportance(p=2)
-        pruner_entry = partial(tp.pruner.GroupNormPruner, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.GroupNormPruner,
+                               global_pruning=args.global_pruning)
     elif args.method == "group_sl":
         args.sparsity_learning = True
         imp = tp.importance.GroupNormImportance(p=2)
-        pruner_entry = partial(tp.pruner.GroupNormPruner, reg=args.reg, global_pruning=args.global_pruning)
+        pruner_entry = partial(tp.pruner.GroupNormPruner,
+                               reg=args.reg, global_pruning=args.global_pruning)
     else:
         raise NotImplementedError
-    
-    #args.is_accum_importance = is_accum_importance
+
+    # args.is_accum_importance = is_accum_importance
     unwrapped_parameters = []
     ignored_layers = []
     ch_sparsity_dict = {}
@@ -189,8 +208,8 @@ def get_pruner(model, example_inputs):
             ignored_layers.append(m)
         elif isinstance(m, torch.nn.modules.conv._ConvNd) and m.out_channels == args.num_classes:
             ignored_layers.append(m)
-    
-    # Here we fix iterative_steps=200 to prune the model progressively with small steps 
+
+    # Here we fix iterative_steps=200 to prune the model progressively with small steps
     # until the required speed up is achieved.
     pruner = pruner_entry(
         model,
@@ -213,11 +232,14 @@ def main():
     # Logger
     if args.mode == "prune":
         prefix = 'global' if args.global_pruning else 'local'
-        logger_name = "{}-{}-{}-{}".format(args.dataset, prefix, args.method, args.model)
-        args.output_dir = os.path.join(args.output_dir, args.dataset, args.mode, logger_name)
+        logger_name = "{}-{}-{}-{}".format(args.dataset,
+                                           prefix, args.method, args.model)
+        args.output_dir = os.path.join(
+            args.output_dir, args.dataset, args.mode, logger_name)
         log_file = "{}/{}.txt".format(args.output_dir, logger_name)
     elif args.mode == "pretrain":
-        args.output_dir = os.path.join(args.output_dir, args.dataset, args.mode)
+        args.output_dir = os.path.join(
+            args.output_dir, args.dataset, args.mode)
         logger_name = "{}-{}".format(args.dataset, args.model)
         log_file = "{}/{}.txt".format(args.output_dir, logger_name)
     elif args.mode == "test":
@@ -230,7 +252,8 @@ def main():
         args.dataset, data_root="data"
     )
     args.num_classes = num_classes
-    model = registry.get_model(args.model, num_classes=num_classes, pretrained=True, target_dataset=args.dataset)
+    model = registry.get_model(
+        args.model, num_classes=num_classes, pretrained=True, target_dataset=args.dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dst,
         batch_size=args.batch_size,
@@ -241,7 +264,7 @@ def main():
     test_loader = torch.utils.data.DataLoader(
         val_dst, batch_size=args.batch_size, num_workers=4
     )
-    
+
     for k, v in utils.utils.flatten_dict(vars(args)).items():  # print args
         args.logger.info("%s: %s" % (k, v))
 
@@ -251,9 +274,9 @@ def main():
             model = loaded
         else:
             model.load_state_dict(loaded)
-        args.logger.info("Loading model from {restore}".format(restore=args.restore))
+        args.logger.info(
+            "Loading model from {restore}".format(restore=args.restore))
     model = model.to(args.device)
-
 
     ######################################################
     # Training / Pruning / Testing
@@ -276,8 +299,9 @@ def main():
         pruner = get_pruner(model, example_inputs=example_inputs)
         # 0. Sparsity Learning
         if args.sparsity_learning:
-            reg_pth = "reg_{}_{}_{}_{}.pth".format(args.dataset, args.model, args.method, args.reg)
-            reg_pth = os.path.join( os.path.join(args.output_dir, reg_pth) )
+            reg_pth = "reg_{}_{}_{}_{}.pth".format(
+                args.dataset, args.model, args.method, args.reg)
+            reg_pth = os.path.join(os.path.join(args.output_dir, reg_pth))
             if not args.sl_restore:
                 args.logger.info("Regularizing...")
                 train_model(
@@ -290,22 +314,28 @@ def main():
                     lr_decay_gamma=args.lr_decay_gamma,
                     pruner=pruner,
                     save_state_dict_only=True,
-                    save_as = reg_pth,
+                    save_as=reg_pth,
                 )
-            args.logger.info("Loading the sparse model from {}...".format(reg_pth))
-            model.load_state_dict( torch.load( reg_pth, map_location=args.device) )
-        
+            args.logger.info(
+                "Loading the sparse model from {}...".format(reg_pth))
+            model.load_state_dict(torch.load(
+                reg_pth, map_location=args.device))
+
         # 1. Pruning
         model.eval()
-        ori_ops, ori_size = tp.utils.count_ops_and_params(model, example_inputs=example_inputs)
+        ori_ops, ori_size = tp.utils.count_ops_and_params(
+            model, example_inputs=example_inputs)
         ori_acc, ori_val_loss = eval(model, test_loader, device=args.device)
         args.logger.info("Pruning...")
-        progressive_pruning(pruner, model, speed_up=args.speed_up, example_inputs=example_inputs)
-        del pruner # remove reference
+        progressive_pruning(
+            pruner, model, speed_up=args.speed_up, example_inputs=example_inputs)
+        del pruner  # remove reference
         args.logger.info(model)
-        pruned_ops, pruned_size = tp.utils.count_ops_and_params(model, example_inputs=example_inputs)
-        pruned_acc, pruned_val_loss = eval(model, test_loader, device=args.device)
-        
+        pruned_ops, pruned_size = tp.utils.count_ops_and_params(
+            model, example_inputs=example_inputs)
+        pruned_acc, pruned_val_loss = eval(
+            model, test_loader, device=args.device)
+
         args.logger.info(
             "Params: {:.2f} M => {:.2f} M ({:.2f}%)".format(
                 ori_size / 1e6, pruned_size / 1e6, pruned_size / ori_size * 100
@@ -323,7 +353,7 @@ def main():
         args.logger.info(
             "Val Loss: {:.4f} => {:.4f}".format(ori_val_loss, pruned_val_loss)
         )
-        
+
         # 2. Finetuning
         args.logger.info("Finetuning...")
         train_model(
@@ -344,7 +374,9 @@ def main():
         args.logger.info("Params: {:.2f} M".format(params / 1e6))
         args.logger.info("ops: {:.2f} M".format(ops / 1e6))
         acc, val_loss = eval(model, test_loader)
-        args.logger.info("Acc: {:.4f} Val Loss: {:.4f}\n".format(acc, val_loss))
+        args.logger.info(
+            "Acc: {:.4f} Val Loss: {:.4f}\n".format(acc, val_loss))
+
 
 if __name__ == "__main__":
     main()
