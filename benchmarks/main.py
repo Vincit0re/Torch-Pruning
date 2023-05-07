@@ -129,7 +129,7 @@ def train_model(
             optimizer.step()
             if i % 10 == 0 and args.verbose:
                 args.logger.info(
-                    "Epoch {:d}/{:d}, iter {:d}/{:d}, loss={:.4f}, lr={:.4f}".format(
+                    "Epoch {:d}/{:d}, iter+1 {:d}/{:d}, loss={:.4f}, lr={:.4f}".format(
                         epoch,
                         epochs,
                         i,
