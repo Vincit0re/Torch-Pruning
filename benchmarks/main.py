@@ -129,8 +129,8 @@ def train_model(
             optimizer.step()
             if i % 10 == 0 and args.verbose:
                 args.logger.info(
-                    "Epoch {:d}/{:d}, iter+1 {:d}/{:d}, loss={:.4f}, lr={:.4f}".format(
-                        epoch,
+                    "Epoch {:d}/{:d}, iter {:d}/{:d}, loss={:.4f}, lr={:.4f}".format(
+                        epoch+1,
                         epochs,
                         i,
                         len(train_loader),
@@ -143,7 +143,7 @@ def train_model(
         acc, val_loss = eval(model, test_loader, device=device)
         args.logger.info(
             "Epoch {:d}/{:d}, Acc={:.4f}, Val Loss={:.4f}, lr={:.4f}".format(
-                epoch, epochs, acc, val_loss, optimizer.param_groups[0]["lr"]
+                epoch+1, epochs, acc, val_loss, optimizer.param_groups[0]["lr"]
             )
         )
         if best_acc < acc:
